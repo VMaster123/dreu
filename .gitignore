@@ -11,6 +11,10 @@
 !check_all.py
 !config.ini.example
 !students.csv
+!Research_Code/
+!Research_Code/**
+!Notes/
+!Notes/**
 
 # Allow the logs folder and its contents
 !logs/
