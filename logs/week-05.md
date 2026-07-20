@@ -29,4 +29,5 @@
 ## Notes
 
 - I will update this more on Monday given meeting with Dr.Lin.
+ - Added some updates notes on Tensors, since they keep popping up as well.
   https://www.overleaf.com/read/jmqnkwyxsdbz#ff567c
