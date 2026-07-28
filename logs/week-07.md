@@ -26,4 +26,4 @@
 
 ## Notes
 
-- Sorry for the delay. Please note that the code is in its elementary stages and have not been fully set in stone. Full disclosre I used AI for the programming, and will comb over the code extensively by hand alongside using verification and validation methods in the next upcoming weeks. https://www.overleaf.com/read/jmqnkwyxsdbz#ff567c
+- Sorry for the delay. Please note that the code is in its elementary stages and have not been fully set in stone. Full disclosre I used AI for the programming, and will comb over the code extensively by hand alongside using verification and validation methods in the next upcoming weeks. Also I could not upload the data since it was too large. https://www.overleaf.com/read/jmqnkwyxsdbz#ff567c
