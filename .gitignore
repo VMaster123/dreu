@@ -16,6 +16,9 @@
 !Notes/
 !Notes/**
 
+Research_Code/codebase/data/*.pkl
+Research_Code/codebase/data/*.csv
+
 # Allow the logs folder and its contents
 !logs/
 !logs/**
@@ -24,3 +27,4 @@
 !.github/
 !.github/workflows/
 !.github/workflows/validate-log.yml
+
