@@ -1,7 +1,7 @@
 # Ignore everything by default
 *
 
-# Explicitly allow journal/template files
+# Explicitly allow the journal/template files
 !.gitignore
 !README.md
 !TEMPLATE.md
@@ -12,7 +12,7 @@
 !config.ini.example
 !students.csv
 
-# Allow Research_Code directory
+# Allow Research_Code directories
 !Research_Code/
 !Research_Code/**/
 
@@ -22,6 +22,14 @@ Research_Code/**/*.pkl
 Research_Code/**/*.csv
 Research_Code/**/__pycache__/
 Research_Code/**/*.pyc
+
+# Allow Python source files
+!Research_Code/**/*.py
+
+# Allow desired result files
+!Research_Code/**/results/
+!Research_Code/**/results/**/*.json
+!Research_Code/**/results/**/*.png
 
 # Allow Notes
 !Notes/
