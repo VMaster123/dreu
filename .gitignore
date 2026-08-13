@@ -1,7 +1,7 @@
 # Ignore everything by default
 *
 
-# Explicitly allow the journal template files
+# Explicitly allow journal/template files
 !.gitignore
 !README.md
 !TEMPLATE.md
@@ -11,20 +11,27 @@
 !check_all.py
 !config.ini.example
 !students.csv
+
+# Allow Research_Code directory
 !Research_Code/
-!Research_Code/**
+!Research_Code/**/
+
+# Ignore generated/data/model files inside Research_Code
+Research_Code/**/*.pt
+Research_Code/**/*.pkl
+Research_Code/**/*.csv
+Research_Code/**/__pycache__/
+Research_Code/**/*.pyc
+
+# Allow Notes
 !Notes/
 !Notes/**
 
-Research_Code/codebase/data/*.pkl
-Research_Code/codebase/data/*.csv
-
-# Allow the logs folder and its contents
+# Allow logs
 !logs/
 !logs/**
 
-# Allow the GitHub Actions workflow
+# Allow GitHub Actions workflow
 !.github/
 !.github/workflows/
 !.github/workflows/validate-log.yml
-
