@@ -68,29 +68,63 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 # ============================================================
 
 BATCH_SIZE = 256
+
+# Number of additional epochs to train from the loaded
+# checkpoint.
 EPOCHS = 100
+
 LR = 3e-4
-PATIENCE = 15
+PATIENCE = 5
+
 LATENT_DIM = 64
 WEIGHT_DECAY = 1e-4
+
+
+# ============================================================
+# CHECKPOINT SETTINGS
+# ============================================================
+
+# IMPORTANT:
+#
+# True  = LOAD EXISTING WEIGHTS. DO NOT START FROM SCRATCH.
+# False = intentionally create a new model.
+#
+# Keep this TRUE.
+RESUME_FROM_CHECKPOINT = True
+
+
+# If a checkpoint is missing while RESUME_FROM_CHECKPOINT=True,
+# the program STOPS rather than silently training from scratch.
+REQUIRE_CHECKPOINT = True
 
 
 # ============================================================
 # DEBUG
 # ============================================================
 
-# KEEP THIS TRUE UNTIL THE MODEL PASSES THE OVERFIT TEST.
 DEBUG_MODE = False
 
 DEBUG_TRAIN_SAMPLES = 2048
 DEBUG_VAL_SAMPLES = 2048
 
-# Explicit tiny overfit test.
-RUN_OVERFIT_TEST = True
+
+# ============================================================
+# OVERFIT TEST
+# ============================================================
+
+# DO NOT run the fresh-model overfit test when resuming.
+#
+# The old version created a brand-new random encoder and
+# surrogate here, which has nothing to do with your existing
+# trained model.
+#
+# If you specifically want to perform a fresh architecture
+# sanity test later, turn this on manually.
+RUN_OVERFIT_TEST = False
 
 OVERFIT_SAMPLES = 128
-OVERFIT_EPOCHS = 300
-OVERFIT_LR = 2e-4
+OVERFIT_EPOCHS = 1000
+OVERFIT_LR = 3e-3
 
 
 # ============================================================
@@ -109,7 +143,7 @@ print("\nUsing device:", DEVICE)
 
 class SurrogateModel(nn.Module):
     """
-    Stronger surrogate than a single shallow head.
+    Surrogate model.
 
     Input:
         latent representation z
@@ -226,11 +260,41 @@ def discover_benchmarks():
 
 
 # ============================================================
-# MODEL
+# CHECKPOINT PATHS
+# ============================================================
+
+
+def get_checkpoint_paths(benchmark):
+
+    benchmark_dir = os.path.join(
+        RESULTS_DIR,
+        benchmark,
+    )
+
+    encoder_path = os.path.join(
+        benchmark_dir,
+        "encoder.pt",
+    )
+
+    surrogate_path = os.path.join(
+        benchmark_dir,
+        "surrogate.pt",
+    )
+
+    return (
+        benchmark_dir,
+        encoder_path,
+        surrogate_path,
+    )
+
+
+# ============================================================
+# MODEL CREATION
 # ============================================================
 
 
 def create_encoder():
+
     return ClassicalEncoder(
         latent_dim=LATENT_DIM,
         max_j_positions=64,
@@ -240,7 +304,149 @@ def create_encoder():
 
 
 def create_surrogate():
+
     return SurrogateModel(input_dim=LATENT_DIM).to(DEVICE)
+
+
+# ============================================================
+# LOAD EXISTING CHECKPOINT
+# ============================================================
+
+
+def load_existing_models(benchmark):
+
+    (
+        benchmark_dir,
+        encoder_path,
+        surrogate_path,
+    ) = get_checkpoint_paths(benchmark)
+
+    print("\n" + "=" * 60)
+    print("CHECKPOINT STATUS")
+    print("=" * 60)
+
+    print(
+        "Benchmark:",
+        benchmark,
+    )
+
+    print(
+        "Encoder checkpoint:",
+        encoder_path,
+    )
+
+    print(
+        "Surrogate checkpoint:",
+        surrogate_path,
+    )
+
+    encoder_exists = os.path.exists(encoder_path)
+
+    surrogate_exists = os.path.exists(surrogate_path)
+
+    print(
+        "Encoder exists:",
+        encoder_exists,
+    )
+
+    print(
+        "Surrogate exists:",
+        surrogate_exists,
+    )
+
+    # --------------------------------------------------------
+    # PROTECTION AGAINST ACCIDENTALLY STARTING FROM SCRATCH
+    # --------------------------------------------------------
+
+    if REQUIRE_CHECKPOINT:
+
+        if not encoder_exists:
+            raise FileNotFoundError(
+                "\nSTOPPING: Existing encoder checkpoint "
+                "was not found.\n\n"
+                f"Expected:\n{encoder_path}\n\n"
+                "The script will NOT create a fresh encoder "
+                "because REQUIRE_CHECKPOINT=True."
+            )
+
+        if not surrogate_exists:
+            raise FileNotFoundError(
+                "\nSTOPPING: Existing surrogate checkpoint "
+                "was not found.\n\n"
+                f"Expected:\n{surrogate_path}\n\n"
+                "The script will NOT create a fresh surrogate "
+                "because REQUIRE_CHECKPOINT=True."
+            )
+
+    encoder = create_encoder()
+    surrogate = create_surrogate()
+
+    # --------------------------------------------------------
+    # LOAD WEIGHTS
+    # --------------------------------------------------------
+
+    print("\nLoading existing encoder weights...")
+
+    encoder_state = torch.load(
+        encoder_path,
+        map_location=DEVICE,
+    )
+
+    encoder.load_state_dict(encoder_state)
+
+    print("Encoder weights loaded.")
+
+    print("\nLoading existing surrogate weights...")
+
+    surrogate_state = torch.load(
+        surrogate_path,
+        map_location=DEVICE,
+    )
+
+    surrogate.load_state_dict(surrogate_state)
+
+    print("Surrogate weights loaded.")
+
+    print(
+        "\n*** MODEL IS BEING RESUMED FROM EXISTING "
+        "WEIGHTS — NOT FROM RANDOM INITIALIZATION. ***"
+    )
+
+    return encoder, surrogate
+
+
+# ============================================================
+# CREATE NEW MODELS
+# ============================================================
+
+
+def create_new_models():
+
+    if REQUIRE_CHECKPOINT:
+        raise RuntimeError(
+            "Refusing to create a new model because " "REQUIRE_CHECKPOINT=True."
+        )
+
+    print("\nWARNING: Creating NEW models from random " "initialization.")
+
+    encoder = create_encoder()
+    surrogate = create_surrogate()
+
+    return encoder, surrogate
+
+
+# ============================================================
+# MODEL INITIALIZATION
+# ============================================================
+
+
+def initialize_models(benchmark):
+
+    if RESUME_FROM_CHECKPOINT:
+
+        return load_existing_models(benchmark)
+
+    return create_new_models()
 
 
 # ============================================================
@@ -423,6 +629,7 @@ def forward_encoder(
     surrogate,
     batch,
 ):
+
     z = encoder(
         batch["classical"],
         batch["J"],
@@ -437,27 +644,17 @@ def forward_encoder(
 
 
 # ============================================================
-# OVERFIT TEST
+# OPTIONAL OVERFIT TEST
 # ============================================================
 
 
 def run_overfit_test(train_loader):
-    """
-    Strict sanity test.
-
-    Loads exactly 128 examples and repeatedly trains on those
-    same examples. The purpose is ONLY to verify that the model
-    and data interface have enough capacity to memorize data.
-    """
 
     print("\n" + "=" * 60)
     print("OVERFIT SANITY TEST")
     print("=" * 60)
-    print("Goal: force the model to memorize 128 samples.")
 
-    # --------------------------------------------------------
-    # Collect exactly one fixed dataset
-    # --------------------------------------------------------
+    print("WARNING: This creates a COMPLETELY NEW model.")
 
     batches = []
 
@@ -467,7 +664,7 @@ def run_overfit_test(train_loader):
 
         batch_size = batch["energy"].shape[0]
 
-        remaining = 128 - total
+        remaining = OVERFIT_SAMPLES - total
 
         if remaining <= 0:
             break
@@ -479,13 +676,11 @@ def run_overfit_test(train_loader):
 
         total += batch["energy"].shape[0]
 
-        if total >= 128:
+        if total >= OVERFIT_SAMPLES:
             break
 
-    if total < 128:
-        raise RuntimeError(f"Could only collect {total} samples for overfit test.")
-
-    # Concatenate fixed tensors.
+    if total < OVERFIT_SAMPLES:
+        raise RuntimeError(f"Could only collect {total} samples.")
 
     fixed_batch = {}
 
@@ -494,20 +689,14 @@ def run_overfit_test(train_loader):
         values = [b[key] for b in batches]
 
         try:
-            fixed_batch[key] = torch.cat(values, dim=0)
+            fixed_batch[key] = torch.cat(
+                values,
+                dim=0,
+            )
         except RuntimeError:
             fixed_batch[key] = values[0]
 
     fixed_batch = {k: v.to(DEVICE) for k, v in fixed_batch.items()}
-
-    print(
-        "Actual overfit samples:",
-        fixed_batch["energy"].shape[0],
-    )
-
-    # --------------------------------------------------------
-    # Fresh model
-    # --------------------------------------------------------
 
     encoder = create_encoder()
     surrogate = create_surrogate()
@@ -519,43 +708,19 @@ def run_overfit_test(train_loader):
 
     optimizer = torch.optim.Adam(
         parameters,
-        lr=3e-3,
+        lr=OVERFIT_LR,
         weight_decay=0.0,
     )
 
     criterion = nn.MSELoss()
 
-    # --------------------------------------------------------
-    # Initial loss
-    # --------------------------------------------------------
+    final_loss = float("inf")
 
-    with torch.no_grad():
-
-        prediction, _ = forward_encoder(
-            encoder,
-            surrogate,
-            fixed_batch,
-        )
-
-        initial_loss = criterion(
-            prediction,
-            fixed_batch["energy"],
-        ).item()
-
-    # --------------------------------------------------------
-    # Train repeatedly on EXACT SAME batch
-    # --------------------------------------------------------
-
-    final_loss = initial_loss
-
-    for epoch in range(1000):
-
-        encoder.train()
-        surrogate.train()
+    for epoch in range(OVERFIT_EPOCHS):
 
         optimizer.zero_grad(set_to_none=True)
 
-        prediction, z = forward_encoder(
+        prediction, _ = forward_encoder(
             encoder,
             surrogate,
             fixed_batch,
@@ -572,26 +737,24 @@ def run_overfit_test(train_loader):
 
         final_loss = loss.item()
 
-        if epoch == 0 or (epoch + 1) % 55 == 0:
-            print(f"Overfit Epoch {epoch + 1:03d}/1000 | " f"MSE = {final_loss:.8f}")
+        if epoch == 0 or (epoch + 1) % 50 == 0:
+
+            print(
+                f"Overfit Epoch "
+                f"{epoch + 1:04d}/"
+                f"{OVERFIT_EPOCHS} | "
+                f"MSE = {final_loss:.8f}"
+            )
 
         if final_loss < 2e-3:
-            print(f"\nOverfit converged at epoch {epoch + 1}.")
-            break
 
-    print()
+            print("\nOVERFIT TEST PASSED.")
 
-    if final_loss < 2e-3:
+            return True
 
-        print("OVERFIT TEST PASSED.")
-        print(f"Initial MSE: {initial_loss:.8f}")
-        print(f"Final MSE:   {final_loss:.8f}")
+    print("\nOVERFIT TEST FAILED.")
 
-        return True
-
-    print("OVERFIT TEST FAILED.")
-    print(f"Initial MSE: {initial_loss:.8f}")
-    print(f"Final MSE:   {final_loss:.8f}")
+    print(f"Final MSE: {final_loss:.8f}")
 
     return False
 
@@ -602,14 +765,12 @@ def run_overfit_test(train_loader):
 
 
 def train_model(
+    encoder,
+    surrogate,
     train_loader,
     val_loader,
     benchmark,
 ):
-
-    encoder = create_encoder()
-
-    surrogate = create_surrogate()
 
     parameters = list(encoder.parameters()) + list(surrogate.parameters())
 
@@ -634,6 +795,14 @@ def train_model(
     print("\n========================================")
     print("TRAINING:", benchmark)
     print("========================================")
+
+    if RESUME_FROM_CHECKPOINT:
+
+        print("Starting from EXISTING checkpoint.")
+
+    else:
+
+        print("Starting from RANDOM initialization.")
 
     for epoch in range(EPOCHS):
 
@@ -776,7 +945,7 @@ def train_model(
 
     if best_encoder is None:
 
-        raise RuntimeError("Training never produced a valid checkpoint.")
+        raise RuntimeError("Training never produced a " "valid checkpoint.")
 
     encoder.load_state_dict(best_encoder)
 
@@ -885,31 +1054,38 @@ def save_results(
     test_results,
 ):
 
-    benchmark_dir = os.path.join(
-        RESULTS_DIR,
-        benchmark,
-    )
+    (
+        benchmark_dir,
+        encoder_path,
+        surrogate_path,
+    ) = get_checkpoint_paths(benchmark)
 
     os.makedirs(
         benchmark_dir,
         exist_ok=True,
     )
 
+    # --------------------------------------------------------
+    # SAVE ENCODER
+    # --------------------------------------------------------
+
     torch.save(
         encoder.state_dict(),
-        os.path.join(
-            benchmark_dir,
-            "encoder.pt",
-        ),
+        encoder_path,
     )
+
+    # --------------------------------------------------------
+    # SAVE SURROGATE
+    # --------------------------------------------------------
 
     torch.save(
         surrogate.state_dict(),
-        os.path.join(
-            benchmark_dir,
-            "surrogate.pt",
-        ),
+        surrogate_path,
     )
+
+    # --------------------------------------------------------
+    # SAVE RESULTS
+    # --------------------------------------------------------
 
     results = {
         "benchmark": benchmark,
@@ -922,11 +1098,13 @@ def save_results(
         "test_rmse_original": float(test_results["rmse_original"]),
     }
 
+    results_path = os.path.join(
+        benchmark_dir,
+        "results.json",
+    )
+
     with open(
-        os.path.join(
-            benchmark_dir,
-            "results.json",
-        ),
+        results_path,
         "w",
     ) as f:
 
@@ -935,6 +1113,21 @@ def save_results(
             f,
             indent=4,
         )
+
+    print(
+        "\nSaved encoder:",
+        encoder_path,
+    )
+
+    print(
+        "Saved surrogate:",
+        surrogate_path,
+    )
+
+    print(
+        "Saved results:",
+        results_path,
+    )
 
     return results
 
@@ -950,13 +1143,40 @@ def main():
     print("QUANTUM TRANSFER EXPERIMENT")
     print("========================================")
 
+    print(
+        "\nRESUME_FROM_CHECKPOINT =",
+        RESUME_FROM_CHECKPOINT,
+    )
+
+    print(
+        "REQUIRE_CHECKPOINT =",
+        REQUIRE_CHECKPOINT,
+    )
+
+    if RESUME_FROM_CHECKPOINT and REQUIRE_CHECKPOINT:
+
+        print("\n*** SAFETY MODE ENABLED ***")
+
+        print("Existing weights are required.")
+
+        print("The script will NEVER silently " "start from scratch.")
+
     benchmarks = discover_benchmarks()
 
     for benchmark, paths in benchmarks.items():
 
         print("\n\n========================================")
-        print("BENCHMARK:", benchmark)
+
+        print(
+            "BENCHMARK:",
+            benchmark,
+        )
+
         print("========================================")
+
+        # ----------------------------------------------------
+        # DATA
+        # ----------------------------------------------------
 
         (
             train_loader,
@@ -973,7 +1193,13 @@ def main():
         )
 
         # ----------------------------------------------------
-        # CRITICAL SANITY TEST
+        # LOAD EXISTING MODEL
+        # ----------------------------------------------------
+
+        encoder, surrogate = initialize_models(benchmark)
+
+        # ----------------------------------------------------
+        # OPTIONAL OVERFIT TEST
         # ----------------------------------------------------
 
         if RUN_OVERFIT_TEST:
@@ -984,10 +1210,10 @@ def main():
 
                 raise RuntimeError(
                     "\n\nSTOPPING.\n"
-                    "The encoder + surrogate cannot "
-                    "memorize a tiny dataset.\n\n"
-                    "Fix the model/data interface before "
-                    "running the benchmark."
+                    "The fresh encoder + surrogate "
+                    "cannot memorize a tiny dataset.\n\n"
+                    "Fix the model/data interface "
+                    "before continuing."
                 )
 
         # ----------------------------------------------------
@@ -1001,6 +1227,8 @@ def main():
             val_history,
             best_val,
         ) = train_model(
+            encoder,
+            surrogate,
             train_loader,
             val_loader,
             benchmark,
@@ -1036,7 +1264,10 @@ def main():
         # REPORT
         # ----------------------------------------------------
 
-        print("\nRESULT:", benchmark)
+        print(
+            "\nRESULT:",
+            benchmark,
+        )
 
         print(
             "Best validation MSE:",
@@ -1064,7 +1295,9 @@ def main():
         )
 
     print("\n========================================")
+
     print("DONE")
+
     print("========================================")
 
 

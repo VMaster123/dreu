@@ -2,77 +2,48 @@ import torch
 import torch.nn as nn
 
 
-def _to_float_tensor(x):
-    if torch.is_tensor(x):
-        return x.float()
-
-    # Handle numeric numpy/list inputs.
-    try:
-        return torch.as_tensor(x, dtype=torch.float32)
-    except (TypeError, ValueError):
-        return torch.zeros(1, dtype=torch.float32)
-
-
 def encode_noise(noise):
     """
-    Robust noise encoder.
+    One-hot encode the noise channel.
 
-    Supports:
-      - numeric tensors
-      - lists / numpy arrays
-      - dictionaries
-      - strings / categorical noise descriptions
-
-    Returns a fixed-size numeric tensor.
+    Encoding:
+        phase_damping  -> [1.0, 0.0]
+        depolarizing   -> [0.0, 1.0]
     """
+
     if noise is None:
-        return torch.zeros(1, dtype=torch.float32)
+        raise ValueError("Noise channel cannot be None.")
 
+    # Handle tensor input
     if torch.is_tensor(noise):
-        return noise.float().flatten()
+        noise = noise.detach().cpu().flatten()
 
-    if isinstance(noise, dict):
-        values = []
-        for key in sorted(noise.keys()):
-            value = noise[key]
+        if noise.numel() == 2:
+            return noise.float()
 
-            if isinstance(value, (int, float, np_number_types())):
-                values.append(float(value))
-            elif isinstance(value, (list, tuple)):
-                for v in value:
-                    try:
-                        values.append(float(v))
-                    except (TypeError, ValueError):
-                        continue
+        raise ValueError(
+            f"Expected a 2-element noise encoding, got shape {noise.shape}."
+        )
 
-        if values:
-            return torch.tensor(values, dtype=torch.float32)
+    # Handle string input
+    noise = str(noise).strip().lower()
 
-        return torch.zeros(1, dtype=torch.float32)
+    if noise in {"phase_damping", "phase damping", "phase-damping"}:
+        return torch.tensor(
+            [1.0, 0.0],
+            dtype=torch.float32,
+        )
 
-    if isinstance(noise, (list, tuple)):
-        values = []
-        for value in noise:
-            try:
-                values.append(float(value))
-            except (TypeError, ValueError):
-                continue
+    if noise in {"depolarizing", "depolarising"}:
+        return torch.tensor(
+            [0.0, 1.0],
+            dtype=torch.float32,
+        )
 
-        if values:
-            return torch.tensor(values, dtype=torch.float32)
-
-        return torch.zeros(1, dtype=torch.float32)
-
-    try:
-        return torch.tensor([float(noise)], dtype=torch.float32)
-    except (TypeError, ValueError):
-        # Stable categorical encoding for strings.
-        text = str(noise)
-        encoded = [
-            float(sum(ord(c) for c in text)) / 1000.0,
-            float(len(text)) / 100.0,
-        ]
-        return torch.tensor(encoded, dtype=torch.float32)
+    raise ValueError(
+        f"Unknown noise channel: '{noise}'. "
+        "Expected 'phase_damping' or 'depolarizing'."
+    )
 
 
 def np_number_types():
@@ -242,33 +213,35 @@ class ClassicalEncoder(nn.Module):
         J = J.float()
 
         if J.dim() == 2:
+            # [B, N] -> [B, N, 1]
             J = J.unsqueeze(-1)
 
-        # If J is [B, N] treat each value as one feature.
-        # If J is [B, N, 2], preserve the two features.
-        if J.shape[-1] != self.j_feature_dim:
+        # Guarantee exactly 2 features per J position.
+        if J.shape[-1] < self.j_feature_dim:
 
-            if J.shape[-1] > self.j_feature_dim:
-                J = J[..., : self.j_feature_dim]
+            padding = torch.zeros(
+                *J.shape[:-1],
+                self.j_feature_dim - J.shape[-1],
+                device=J.device,
+                dtype=J.dtype,
+            )
 
-            else:
-                padding = torch.zeros(
-                    *J.shape[:-1],
-                    self.j_feature_dim - J.shape[-1],
-                    device=J.device,
-                    dtype=J.dtype,
-                )
+            J = torch.cat(
+                [J, padding],
+                dim=-1,
+            )
 
-                J = torch.cat(
-                    [J, padding],
-                    dim=-1,
-                )
+        elif J.shape[-1] > self.j_feature_dim:
 
+            J = J[..., : self.j_feature_dim]
+
+        # Guarantee exactly 64 J positions.
         J = self._pad_or_truncate(
             J,
             self.max_j_positions,
         )
 
+        # [B, 64, 2] -> [B, 128]
         J_flat = J.reshape(
             J.shape[0],
             self.max_j_positions * self.j_feature_dim,
